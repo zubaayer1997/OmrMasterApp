@@ -2,7 +2,13 @@ package com.omrmaster.app.omr
 
 import android.content.ContentValues
 import android.content.Context
-import android.graphics.*
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.DashPathEffect
+import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -11,7 +17,14 @@ import com.omrmaster.app.data.local.ExamEntity
 import com.omrmaster.app.data.local.StudentResultEntity
 import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
-import org.opencv.core.*
+import org.opencv.core.Core
+import org.opencv.core.CvType
+import org.opencv.core.Mat
+import org.opencv.core.MatOfPoint
+import org.opencv.core.MatOfPoint2f
+import org.opencv.core.Point
+import org.opencv.core.Scalar
+import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 import java.io.File
 import java.io.FileOutputStream
@@ -64,7 +77,6 @@ object OmrImageProcessor {
                 "৪টি কোণার কালো বর্গক্ষেত্র স্পষ্টভাবে শনাক্ত করা যায়নি। পর্যাপ্ত আলোতে পুরো শীটের ছবি তুলুন।"
             )
 
-        // Prepare binary inverted map for fill-ratio computation
         val gray = Mat()
         Imgproc.cvtColor(warpedRgba, gray, Imgproc.COLOR_RGBA2GRAY)
         val blurred = Mat()
@@ -160,7 +172,6 @@ object OmrImageProcessor {
 
             when {
                 filledIndices.size >= 2 -> {
-                    // Multiple bubbles filled -> Yellow marker box, NOT evaluated
                     studentAnswers[qIdx] = StudentResultEntity.ANSWER_MULTIPLE
                     multipleCount++
 
@@ -196,7 +207,6 @@ object OmrImageProcessor {
                     } else if (correctOpt in 0..3) {
                         wrongCount++
                         canvas.drawCircle(cx, cy, cr, redPaint)
-                        // Show correct option context with dashed green circle
                         val correctBubble = row.bubbles[correctOpt]
                         canvas.drawCircle(
                             correctBubble.nx * w,
@@ -205,7 +215,6 @@ object OmrImageProcessor {
                             greenHintPaint
                         )
                     } else {
-                        // Answer key not set for this question
                         canvas.drawCircle(cx, cy, cr, yellowStrokePaint)
                     }
                 }
@@ -226,7 +235,6 @@ object OmrImageProcessor {
             }
         }
 
-        // Calculate Final Marks (Multiple/Skipped neither add nor deduct marks)
         val rawMarks = if (exam.negativeMarking) {
             correctCount - (wrongCount * exam.negativePenalty)
         } else {
@@ -234,16 +242,13 @@ object OmrImageProcessor {
         }
         val finalMarks = Math.round(rawMarks * 100.0) / 100.0
 
-        // 6. Stamp Top Header Overlay (e.g., Roll: 1221    Section: A    Marks: 05)
         drawTopHeaderOverlay(canvas, rollString, section, finalMarks)
 
-        // Release OpenCV Mats
         warpedRgba.release()
         gray.release()
         blurred.release()
         binaryInv.release()
 
-        // 7. Save annotated output image
         val savedPath = if (saveToGallery) {
             saveAnnotatedImage(context, annotatedBitmap, exam.name, rollString)
         } else {
@@ -461,9 +466,10 @@ object OmrImageProcessor {
             val extent = area / rectArea
             if (extent < 0.62) continue
 
-            val peri = Imgproc.arcLength(MatOfPoint2f(*contour.toArray()), true)
+            val pts2f = MatOfPoint2f(*contour.toArray())
+            val peri = Imgproc.arcLength(pts2f, true)
             val approx = MatOfPoint2f()
-            Imgproc.approxPolyDP(MatOfPoint2f(*contour.toArray()), approx, 0.05 * peri, true)
+            Imgproc.approxPolyDP(pts2f, approx, 0.05 * peri, true)
             if (approx.total() in 4..6) {
                 val roi = blurred.submat(rect)
                 val meanBrightness = Core.mean(roi).`val`[0]
@@ -473,6 +479,7 @@ object OmrImageProcessor {
                     candidates.add(center to area)
                 }
             }
+            pts2f.release()
             approx.release()
         }
 
@@ -501,7 +508,6 @@ object OmrImageProcessor {
             return null
         }
 
-        // Validate quadrilateral spans a reasonable portion of the sheet
         val topWidth = hypot(tr.x - tl.x, tr.y - tl.y)
         val leftHeight = hypot(bl.x - tl.x, bl.y - tl.y)
         if (topWidth < wImg * 0.25 || leftHeight < hImg * 0.25) {
@@ -529,7 +535,6 @@ object OmrImageProcessor {
         transform.release()
         rgba.release()
 
-        // Auto-correct 180-degree upside-down orientation using the orientation square
         if (isSheetUpsideDown(warped, geometry)) {
             Core.rotate(warped, warped, Core.ROTATE_180)
         }
